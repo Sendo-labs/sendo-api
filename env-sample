@@ -5,3 +5,5 @@ HELIUS_BASE_URL=https://mainnet.helius-rpc.com/?api-key=
 
 BIRDEYE_API_KEY=<api_key>
 BIRDEYE_BASE_URL=https://public-api.birdeye.so
+# RPS: Request Per Second (r/s)
+BIRDEYE_RPS=1

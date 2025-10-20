@@ -1,6 +1,6 @@
-import { getTransactionBySignature } from "@/services/helius";
-import { serializedBigInt } from "@/utils/decoder/index.js";
-import { decodeTxData } from "@/utils/decoder/index.js";
+import { getTransactionBySignature } from "../src/services/helius";
+import { serializedBigInt } from "../src/utils/decoder/index.js";
+import { decodeTxData } from "../src/utils/decoder/index.js";
 
 (async () => {
     const address = "3AU66kovwjGTNFLsucxsTDteMWXPLn9cetLQosAzz1zG";
