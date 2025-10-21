@@ -97,7 +97,7 @@ export const getTradesForAddressController = async (req: Request, res: Response)
         res.json({
             message: 'Transactions retrieved successfully',
             version: '1.0.0',
-            transactions: serializedBigInt(parsedTransactionsArray)
+            trades: serializedBigInt(parsedTransactionsArray)
         });
     } catch (error) {
         res.status(500).json({
