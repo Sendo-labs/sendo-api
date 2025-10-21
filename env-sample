@@ -2,8 +2,9 @@ PORT=4000
 
 HELIUS_API_KEY=<api_key>
 HELIUS_BASE_URL=https://mainnet.helius-rpc.com/?api-key=
+HELIUS_RATE_LIMIT=10
 
 BIRDEYE_API_KEY=<api_key>
 BIRDEYE_BASE_URL=https://public-api.birdeye.so
 # RPS: Request Per Second (r/s)
-BIRDEYE_RPS=1
+BIRDEYE_RATE_LIMIT=1
