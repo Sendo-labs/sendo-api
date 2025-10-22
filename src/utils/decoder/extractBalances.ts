@@ -145,6 +145,25 @@ export const extractBalances = async (tx: any): Promise<BalanceAnalysis> => {
                 uiChange,
                 changeType: change > 0n ? 'increase' : change < 0n ? 'decrease' : 'no_change'
             });
+        } else {
+            // NOUVEAU COMPTE CRÉÉ - Pas dans preTokenBalances mais dans postTokenBalances
+            const postAmount = postBalance.uiTokenAmount.amount;
+            const uiChange = Number(postBalance.uiTokenAmount.uiAmount);
+            
+            tokenBalances.push({
+                accountIndex: postBalance.accountIndex,
+                address: accounts[postBalance.accountIndex],
+                mint: postBalance.mint,
+                owner: postBalance.owner,
+                decimals: postBalance.uiTokenAmount.decimals,
+                preAmount: "0",
+                postAmount,
+                preUiAmount: 0,
+                postUiAmount: Number(postBalance.uiTokenAmount.uiAmount),
+                change: postAmount,
+                uiChange,
+                changeType: 'increase'
+            });
         }
     });
     
@@ -246,6 +265,61 @@ export const getNewAccounts = (analysis: BalanceAnalysis): TokenBalance[] => {
         change.preAmount === "0" && 
         change.preUiAmount === 0
     );
+};
+
+/**
+ * Trouve tous les trades du signer (achats et ventes)
+ * Analyse tous les comptes token impliqués, pas seulement ceux du signer
+ */
+export const getSignerTrades = (analysis: BalanceAnalysis): TokenBalance[] => {
+    const signerTrades: TokenBalance[] = [];
+    
+    // Grouper les changements par mint
+    const mintGroups = new Map<string, TokenBalance[]>();
+    analysis.tokenBalances.forEach(change => {
+        if (!mintGroups.has(change.mint)) {
+            mintGroups.set(change.mint, []);
+        }
+        mintGroups.get(change.mint)!.push(change);
+    });
+    
+    // Analyser chaque mint pour détecter les trades du signer
+    mintGroups.forEach((changes, mint) => {
+        // Trouver les changements du signer pour ce mint
+        const signerChanges = changes.filter(change => change.owner === analysis.signerAddress);
+        
+        if (signerChanges.length > 0) {
+            // Le signer a des changements sur ce mint
+            signerTrades.push(...signerChanges);
+        } else {
+            // Vérifier si le signer a créé un nouveau compte pour ce mint
+            const newAccounts = changes.filter(change => 
+                change.changeType === 'increase' && 
+                change.preAmount === "0" && 
+                change.preUiAmount === 0
+            );
+            
+            // Si un nouveau compte a été créé et que le signer a perdu du SOL, c'est probablement un achat
+            const signerSolChange = analysis.signerSolBalance?.uiChange || 0;
+            if (newAccounts.length > 0 && signerSolChange < 0) {
+                // Trouver le compte créé qui pourrait appartenir au signer
+                // (même si owner n'est pas encore défini, on peut l'inférer du contexte)
+                const potentialSignerAccount = newAccounts.find(account => 
+                    account.address !== analysis.signerAddress // Pas le compte principal SOL
+                );
+                
+                if (potentialSignerAccount) {
+                    signerTrades.push({
+                        ...potentialSignerAccount,
+                        owner: analysis.signerAddress, // Marquer comme appartenant au signer
+                        changeType: 'increase' as const
+                    });
+                }
+            }
+        }
+    });
+    
+    return signerTrades;
 };
 
 /**
