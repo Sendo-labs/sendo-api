@@ -89,7 +89,13 @@ export const getTransactionsForAddress = async (address: string, limit: number, 
                 transactions.push(transaction);
             }
         }
-        return transactions;
+        
+        // Retourner les transactions et les signatures pour la pagination
+        return {
+            transactions,
+            signatures: signatures.map(s => s.signature),
+            hasMore: signatures.length === limit
+        };
     });
 };
 
