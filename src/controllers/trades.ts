@@ -171,7 +171,8 @@ const calculateGlobalSummary = (transactions: any[]) => {
 export const getTradesForAddressController = async (req: Request, res: Response) => {
     try {
         const address: string = req.params.address;
-        const limit: number = Number(req.query.limit) || 25;
+        const limit: number = Number(req.query.limit) || 30;
+        const cursor: string | undefined = req.query.cursor as string;
 
         if (!address) {
             return res.status(400).json({
@@ -180,7 +181,16 @@ export const getTradesForAddressController = async (req: Request, res: Response)
             });
         }
 
-        const transactions = await getTransactionsForAddress(address, limit);
+        // Utiliser seulement les signatures (rapide)
+        // const signatures = await getSignaturesForAddress(address, limit, cursor);
+        const transactions = await getTransactionsForAddress(address, limit, cursor);
+        const pagination = {
+            limit: limit,
+            hasMore: transactions.length === limit,
+            nextCursor: transactions.length > 0 ? transactions[transactions.length - 1].signature : null,
+            currentCursor: cursor || null,
+            totalLoaded: transactions.length
+        };
         
         // Fetch additional address data in parallel
         const [nfts, tokens, balance] = await Promise.all([
@@ -188,8 +198,6 @@ export const getTradesForAddressController = async (req: Request, res: Response)
             await getTokensForAddress(address),
             await getBalanceForAddress(address)
         ]);
-
-        // const balance = await getBalanceForAddress(address);
 
         const parsedTransactionsArray: any[] = [];
 
@@ -281,6 +289,7 @@ export const getTradesForAddressController = async (req: Request, res: Response)
             message: 'Transactions retrieved successfully',
             version: '1.0.0',
             summary: globalSummary,
+            pagination: pagination,
             global: {
                 singatureCount: limit,
                 balance: serializedBigInt(balance),

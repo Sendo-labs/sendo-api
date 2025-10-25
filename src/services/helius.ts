@@ -65,12 +65,18 @@ export const getBalanceForAddress = async (address: string) => {
     });
 };
 
-export const getTransactionsForAddress = async (address: string, limit: number) => {
+export const getTransactionsForAddress = async (address: string, limit: number, before?: string) => {
     return withRateLimit(async () => {
         const transactions: any[] = [];
+        const config: any = { limit };
+
+        if (before) {
+            config.before = before;
+        }
+        
         const signatures = await helius.getSignaturesForAddress(
             address,
-            { limit }
+            config
         );
 
         for (let i = 0; i < signatures.length; i++) {
