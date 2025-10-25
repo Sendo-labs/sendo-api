@@ -3,11 +3,15 @@ import { RateLimiter } from '../utils/rateLimiter.js';
 
 // BirdEye API configuration
 const BIRDEYE_API_BASE = 'https://public-api.birdeye.so/defi';
-const BIRDEYE_API_KEY = process.env.BIRDEYE_API_KEY || 'a96a597d5ed746a2a93cbb8f7d7602e6';
-const BIRDEYE_RPS = parseInt(process.env.BIRDEYE_RATE_LIMIT || '1'); // requests per second
+const BIRDEYE_API_KEY = process.env.BIRDEYE_API_KEY;
+const BIRDEYE_RPS = parseInt(process.env.BIRDEYE_RATE_LIMIT || '50'); // requests per second
 
-// Global rate limiter instance for BirdEye API
-const birdEyeLimiter = new RateLimiter({ requestsPerSecond: BIRDEYE_RPS });
+// Global rate limiter instance for BirdEye API avec optimisations
+const birdEyeLimiter = new RateLimiter({ 
+  requestsPerSecond: BIRDEYE_RPS,
+  burstCapacity: 20, // Traiter 3 requêtes en parallèle
+  adaptiveTiming: true // Ajustement automatique basé sur les erreurs 429
+});
 
 // BirdEye price data interface
 export interface BirdEyePriceData {
@@ -51,7 +55,7 @@ export const getHistoricalPrices = async (
           'x-chain': 'solana',
           ...(BIRDEYE_API_KEY && { 'X-API-KEY': BIRDEYE_API_KEY })
         },
-        timeout: 15000
+        timeout: 5000
       });
       // console.log('repsonse', response.data.data.items)
 
@@ -62,7 +66,7 @@ export const getHistoricalPrices = async (
     } catch (error) {
       if (axios.isAxiosError(error) && error.response?.status === 429) {
         console.warn(`Rate limit hit for ${mint}, retrying in 1s...`);
-        await new Promise((r) => setTimeout(r, 1000));
+        // await new Promise((r) => setTimeout(r, 1000));
         return [];
       }
       console.error(`BirdEye error for ${mint}:`, axios.isAxiosError(error) ? `${error.response?.status} - ${error.message}` : (error instanceof Error ? error.message : String(error)));
@@ -81,7 +85,7 @@ export const getFullHistoricalPrices = async (
   mint: string,
   fromTimestamp: number,
   toTimestamp: number,
-  timeframe: '1m' | '5m' | '15m' | '30m' | '1H' | '4H' | '1D' = '1m'
+  timeframe: '1m' | '5m' | '15m' | '30m' | '1H' | '4H' | '1D' = '30m'
 ): Promise<BirdEyePriceData[]> => {
   let allPrices: BirdEyePriceData[] = [];
   let currentStart = fromTimestamp;
@@ -120,7 +124,7 @@ export const getPriceAnalysis = async (
 ) => {
   const now = Math.floor(Date.now() / 1000);
   
-  const priceHistory = await getFullHistoricalPrices(mint, purchaseTimestamp, now, '30m');
+  const priceHistory = await getFullHistoricalPrices(mint, purchaseTimestamp, now, '1H');
 
   if (!priceHistory.length) return null;
 
