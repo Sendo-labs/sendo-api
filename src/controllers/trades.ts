@@ -183,11 +183,15 @@ export const getTradesForAddressController = async (req: Request, res: Response)
 
         // Utiliser seulement les signatures (rapide)
         // const signatures = await getSignaturesForAddress(address, limit, cursor);
-        const transactions = await getTransactionsForAddress(address, limit, cursor);
+        const result = await getTransactionsForAddress(address, limit, cursor);
+        const transactions = result.transactions;
+        const signatures = result.signatures;
+        const hasMore = result.hasMore;
+
         const pagination = {
             limit: limit,
-            hasMore: transactions.length === limit,
-            nextCursor: transactions.length > 0 ? transactions[transactions.length - 1].signature : null,
+            hasMore: hasMore,
+            nextCursor: signatures.length > 0 ? signatures[signatures.length - 1] : null,
             currentCursor: cursor || null,
             totalLoaded: transactions.length
         };
