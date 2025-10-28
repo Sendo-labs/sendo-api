@@ -4,12 +4,12 @@ import { serializedBigInt } from '@/utils/decoder/index.js';
 import { RateLimiter } from '../utils/rateLimiter.js';
 
 // Helius API configuration
-const HELIUS_RPS = parseInt(process.env.HELIUS_RATE_LIMIT || '200'); // requests per second
+const HELIUS_RPS = parseInt(process.env.HELIUS_RATE_LIMIT || '50'); // requests per second
 
 // Global rate limiter instance for Helius API
 const heliusLimiter = new RateLimiter({ 
   requestsPerSecond: HELIUS_RPS,
-  burstCapacity: 50, // Helius peut gérer plus de requêtes en parallèle
+  burstCapacity: 100,
   adaptiveTiming: true
 });
 
@@ -66,37 +66,35 @@ export const getBalanceForAddress = async (address: string) => {
 };
 
 export const getTransactionsForAddress = async (address: string, limit: number, before?: string) => {
-    return withRateLimit(async () => {
-        const transactions: any[] = [];
-        const config: any = { limit };
+    const config: any = { limit };
 
-        if (before) {
-            config.before = before;
-        }
-        
-        const signatures = await helius.getSignaturesForAddress(
-            address,
-            config
-        );
-
-        for (let i = 0; i < signatures.length; i++) {
-            const signature = signatures[i];
-            const transaction = await helius.getTransaction(signature.signature, {
-                maxSupportedTransactionVersion: 0
-            });
-
-            if (transaction) {
-                transactions.push(transaction);
-            }
-        }
-        
-        // Retourner les transactions et les signatures pour la pagination
-        return {
-            transactions,
-            signatures: signatures.map(s => s.signature),
-            hasMore: signatures.length === limit
-        };
+    if (before) {
+        config.before = before;
+    }
+    
+    // Récupérer les signatures (1 seul appel rate limité)
+    const signatures = await withRateLimit(async () => {
+        return await helius.getSignaturesForAddress(address, config);
     });
+    
+    // Mapper chaque signature en promise rate limitée
+    // Chaque appel à getTransactionBySignature a son propre rate limit
+    const transactionPromises = signatures.map(signatureObj => 
+        getTransactionBySignature(signatureObj.signature)
+    );
+
+    // Exécuter TOUTES les transactions en parallèle
+    // Le rate limiter contrôle automatiquement le flux
+    const transactionResults = await Promise.all(transactionPromises);
+    
+    // Filtrer les null/undefined
+    const transactions = transactionResults.filter(tx => tx !== null);
+    
+    return {
+        transactions,
+        signatures: signatures.map(s => s.signature),
+        hasMore: signatures.length === limit
+    };
 };
 
 export const getTransactionBySignature = async (signature: string) => {

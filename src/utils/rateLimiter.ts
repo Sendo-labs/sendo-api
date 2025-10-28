@@ -23,7 +23,7 @@ export class RateLimiter {
   private adaptiveDelay = 0;
 
   constructor(options: RateLimiterOptions) {
-    const { requestsPerSecond, burstCapacity = 5, adaptiveTiming = true } = options;
+    const { requestsPerSecond, burstCapacity = 50, adaptiveTiming = true } = options;
     this.requestsPerSecond = requestsPerSecond;
     this.burstCapacity = burstCapacity;
     this.adaptiveTiming = adaptiveTiming;

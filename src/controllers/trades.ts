@@ -15,6 +15,7 @@ const calculateGlobalSummary = (transactions: any[]) => {
         uniqueTokens: new Set<string>(),
         totalVolume: 0,
         totalVolumeUSD: 0,
+        totalVolumeSOL: 0,
         totalTokensTraded: 0,
         totalGainLoss: 0,
         profitableTrades: 0,
@@ -32,6 +33,11 @@ const calculateGlobalSummary = (transactions: any[]) => {
     };
 
     transactions.forEach(transaction => {
+        // Calculate total SOL volume (absolute value of SOL balance changes)
+        if (transaction.balances?.solBalance?.uiChange) {
+            summary.totalVolumeSOL += Math.abs(transaction.balances.solBalance.uiChange);
+        }
+
         if (transaction.trades && transaction.trades.length > 0) {
             transaction.trades.forEach((trade: any) => {
                 // Count trade types for ALL trades (including no_change)
@@ -60,6 +66,10 @@ const calculateGlobalSummary = (transactions: any[]) => {
                     const tokenAmount = Math.abs(trade.tokenBalance.uiChange);
                     const volumeUSD = tokenAmount * purchasePrice;
                     
+                    // Calculate PnL in USD
+                    const gainLossUSD = (currentPrice - purchasePrice) * tokenAmount;
+                    const gainLossSOL = gainLossUSD / 150; // Approximate SOL price
+                    
                     summary.totalTokensTraded += tokenAmount;
                     summary.totalVolumeUSD += volumeUSD;
                     
@@ -77,6 +87,8 @@ const calculateGlobalSummary = (transactions: any[]) => {
                         summary.bestTrade = {
                             mint: trade.mint,
                             gainLoss: gainLoss,
+                            gainLossUSD: gainLossUSD,
+                            gainLossSOL: gainLossSOL,
                             signature: transaction.signature[0],
                             blockTime: transaction.blockTime
                         };
@@ -86,6 +98,8 @@ const calculateGlobalSummary = (transactions: any[]) => {
                         summary.worstTrade = {
                             mint: trade.mint,
                             gainLoss: gainLoss,
+                            gainLossUSD: gainLossUSD,
+                            gainLossSOL: gainLossSOL,
                             signature: transaction.signature[0],
                             blockTime: transaction.blockTime
                         };
@@ -146,7 +160,6 @@ const calculateGlobalSummary = (transactions: any[]) => {
             profitableTrades: summary.profitableTrades,
             losingTrades: summary.losingTrades,
             winRate: summary.totalTrades > 0 ? (summary.profitableTrades / summary.totalTrades * 100).toFixed(2) + '%' : '0%',
-            // Trade type breakdown
             purchases: summary.purchases,
             sales: summary.sales,
             noChange: summary.noChange
@@ -154,6 +167,7 @@ const calculateGlobalSummary = (transactions: any[]) => {
         volume: {
             totalTokensTraded: summary.totalTokensTraded.toLocaleString('en-US', { maximumFractionDigits: 0 }),
             totalVolumeUSD: '$' + summary.totalVolumeUSD.toLocaleString('en-US', { maximumFractionDigits: 2 }),
+            totalVolumeSOL: summary.totalVolumeSOL.toFixed(4) + ' SOL',
             averageTradeSizeUSD: summary.totalTrades > 0 ? '$' + (summary.totalVolumeUSD / summary.totalTrades).toLocaleString('en-US', { maximumFractionDigits: 2 }) : '$0.00'
         },
         performance: {
@@ -162,8 +176,22 @@ const calculateGlobalSummary = (transactions: any[]) => {
             totalMissedATH: summary.totalMissedATH.toFixed(2) + '%',
             averageMissedATH: summary.averageMissedATH.toFixed(2) + '%'
         },
-        bestTrade: summary.bestTrade,
-        worstTrade: summary.worstTrade,
+        bestTrade: summary.bestTrade ? {
+            mint: summary.bestTrade.mint,
+            gainLoss: summary.bestTrade.gainLoss.toFixed(2) + '%',
+            gainLossUSD: '$' + summary.bestTrade.gainLossUSD.toFixed(2),
+            gainLossSOL: summary.bestTrade.gainLossSOL.toFixed(4) + ' SOL',
+            signature: summary.bestTrade.signature,
+            blockTime: summary.bestTrade.blockTime
+        } : null,
+        worstTrade: summary.worstTrade ? {
+            mint: summary.worstTrade.mint,
+            gainLoss: summary.worstTrade.gainLoss.toFixed(2) + '%',
+            gainLossUSD: '$' + summary.worstTrade.gainLossUSD.toFixed(2),
+            gainLossSOL: summary.worstTrade.gainLossSOL.toFixed(4) + ' SOL',
+            signature: summary.worstTrade.signature,
+            blockTime: summary.worstTrade.blockTime
+        } : null,
         tokens: tokensArray.sort((a, b) => b.totalVolumeUSD - a.totalVolumeUSD)
     };
 };
@@ -213,10 +241,11 @@ export const getTradesForAddressController = async (req: Request, res: Response)
                 const signerTrades = getSignerTrades(tx.balances);
                 
                 if (signerTrades.length > 0) {
-                    // Analyze price for each token trade
-                    const trades: any[] = [];
+                    // Analyze price for each token trade IN PARALLEL
+                    const solBalanceChange = tx.balances.signerSolBalance?.uiChange || 0;
                     
-                    for (const tokenTrade of signerTrades) {
+                    // Create all trade promises in parallel
+                    const tradePromises = signerTrades.map(async (tokenTrade) => {
                         try {
                             // Always add the trade to the array
                             let tradeData = {
@@ -226,13 +255,8 @@ export const getTradesForAddressController = async (req: Request, res: Response)
                                 priceAnalysis: null as any
                             };
 
-                            // Analyze price based on SOL balance change (negative = purchase, positive = sale)
-                            const solBalanceChange = tx.balances.signerSolBalance?.uiChange || 0;
-                            
-                            // Analyze price for both purchases (negative SOL change) and sales (positive SOL change)
-                            if (Math.abs(solBalanceChange) > 0.001) { // Threshold to avoid noise from small changes
+                            if (tradeData.tokenBalance.uiChange !== 0) { // Threshold to avoid noise from small changes
                                 const tradeType = solBalanceChange < 0 ? 'purchase' : 'sale';
-                                console.log(`Analyzing price for token ${tradeType} (SOL change: ${solBalanceChange}): ${tokenTrade.mint}`);
                                 const priceAnalysis = await getPriceAnalysis(tokenTrade.mint, tx.blockTime);
                                 
                                 if (priceAnalysis) {
@@ -248,17 +272,20 @@ export const getTradesForAddressController = async (req: Request, res: Response)
                                 console.log(`Skipping price analysis for ${tokenTrade.changeType} (SOL change: ${solBalanceChange}): ${tokenTrade.mint}`);
                             }
 
-                            trades.push(tradeData);
+                            return tradeData;
                         } catch (error) {
                             console.error(`Error processing trade for ${tokenTrade.mint}:`, error);
-                            trades.push({
+                            return {
                                 mint: tokenTrade.mint,
                                 tokenBalance: tokenTrade,
                                 tradeType: tokenTrade.changeType,
                                 priceAnalysis: null
-                            });
+                            };
                         }
-                    }
+                    });
+                    
+                    // Execute all trades in parallel (rate limiter controls the flow)
+                    const trades = await Promise.all(tradePromises);
                     
                     parsedTransactionsArray.push({
                         signature: tx.signature,
@@ -288,7 +315,6 @@ export const getTradesForAddressController = async (req: Request, res: Response)
 
         // Calculate global summary
         const globalSummary = calculateGlobalSummary(parsedTransactionsArray);
-
         res.json({
             message: 'Transactions retrieved successfully',
             version: '1.0.0',
