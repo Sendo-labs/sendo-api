@@ -4,13 +4,13 @@ import { RateLimiter } from '../utils/rateLimiter.js';
 // BirdEye API configuration
 const BIRDEYE_API_BASE = 'https://public-api.birdeye.so/defi';
 const BIRDEYE_API_KEY = process.env.BIRDEYE_API_KEY;
-const BIRDEYE_RPS = parseInt(process.env.BIRDEYE_RATE_LIMIT || '50'); // requests per second
+const BIRDEYE_RPS = parseInt(process.env.BIRDEYE_RATE_LIMIT || '1'); // requests per second
 
 // Global rate limiter instance for BirdEye API avec optimisations
 const birdEyeLimiter = new RateLimiter({ 
   requestsPerSecond: BIRDEYE_RPS,
-  burstCapacity: 20, // Traiter 3 requêtes en parallèle
-  adaptiveTiming: true // Ajustement automatique basé sur les erreurs 429
+  burstCapacity: 50,
+  adaptiveTiming: true
 });
 
 // BirdEye price data interface
@@ -78,7 +78,7 @@ export const getHistoricalPrices = async (
 /**
  * Fetch full price history between two timestamps.
  * - Uses the rate limiter for every request
- * - Paginates to avoid duplicates (advance by last timestamp + 1)
+ * - Paginates sequentially (BirdEye needs this for consistency)
  * - Deduplicates by unixTime
  */
 export const getFullHistoricalPrices = async (
@@ -124,8 +124,8 @@ export const getPriceAnalysis = async (
 ) => {
   const now = Math.floor(Date.now() / 1000);
   
+  // Use 1H timeframe for balanced performance and data
   const priceHistory = await getFullHistoricalPrices(mint, purchaseTimestamp, now, '1H');
-
   if (!priceHistory.length) return null;
 
   const purchasePrice = priceHistory[0].value;
