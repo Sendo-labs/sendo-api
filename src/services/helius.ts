@@ -77,9 +77,12 @@ export const getTransactionsForAddress = async (address: string, limit: number, 
         return await helius.getSignaturesForAddress(address, config);
     });
     
-    // Mapper chaque signature en promise rate limitée
+    // Filtrer les signatures sans erreur (err === null ou err === undefined)
+    const validSignatures = signatures.filter(sig => sig.err === null || sig.err === undefined);
+    
+    // Mapper uniquement les signatures valides en promise rate limitée
     // Chaque appel à getTransactionBySignature a son propre rate limit
-    const transactionPromises = signatures.map(signatureObj => 
+    const transactionPromises = validSignatures.map(signatureObj => 
         getTransactionBySignature(signatureObj.signature)
     );
 

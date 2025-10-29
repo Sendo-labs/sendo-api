@@ -3,81 +3,192 @@ import { getPriceAnalysis } from './services/birdeyes.js';
 import { getSignerTrades } from './utils/decoder/extractBalances.js';
 
 /**
+ * Cache simple pour éviter les appels BirdEye dupliqués
+ * Clé: `mint-timestamp` (timestamp arrondi à l'heure pour réduire les duplications)
+ */
+const priceAnalysisCache = new Map<string, any>();
+
+/**
  * Parse transactions with price analysis for each trade
+ * OPTIMIZED VERSION:
+ * 1. Parse toutes les transactions en parallèle
+ * 2. Déduplique les tokens et analyse une seule fois par token
+ * 3. Réutilise les résultats BirdEye pour tous les trades du même token
  * @param transactions Raw transaction data from Helius
  * @returns Array of parsed transactions with trades and price analysis
  */
 export const parseTransactionsWithPriceAnalysis = async (transactions: any[]) => {
-    const parsedTransactionsArray: any[] = [];
-
-    for (const transaction of transactions) {
-        const tx = await decodeTxData(transaction);
-
-        if (tx.error === 'SUCCESS') {
-            // Extract all trades from the signer
-            const signerTrades = getSignerTrades(tx.balances);
-            
-            if (signerTrades.length > 0) {
-                const solBalanceChange = tx.balances.signerSolBalance?.uiChange || 0;
+    // ÉTAPE 1: Parser toutes les transactions en parallèle
+    const parsedTxsResults = await Promise.all(
+        transactions.map(async (transaction) => {
+            try {
+                const tx = await decodeTxData(transaction);
                 
-                // Create all trade promises in parallel
-                const tradePromises = signerTrades.map(async (tokenTrade) => {
-                    try {
-                        let tradeData = {
-                            mint: tokenTrade.mint,
-                            tokenBalance: tokenTrade,
-                            tradeType: tokenTrade.changeType,
-                            priceAnalysis: null as any
-                        };
+                if (tx.error === 'SUCCESS') {
+                    const signerTrades = getSignerTrades(tx.balances);
+                    return {
+                        tx,
+                        signerTrades,
+                        hasTrades: signerTrades.length > 0
+                    };
+                }
+                return null;
+            } catch (error) {
+                console.error(`Error parsing transaction:`, error);
+                return null;
+            }
+        })
+    );
 
-                        // Only analyze price if there's a token change
-                        if (tradeData.tokenBalance.uiChange !== 0) {
-                            const priceAnalysis = await getPriceAnalysis(tokenTrade.mint, tx.blockTime);
-                            
-                            if (priceAnalysis) {
-                                tradeData.priceAnalysis = {
-                                    purchasePrice: priceAnalysis.purchasePrice,
-                                    currentPrice: priceAnalysis.currentPrice,
-                                    athPrice: priceAnalysis.athPrice,
-                                    athTimestamp: priceAnalysis.athTimestamp,
-                                    priceHistoryPoints: priceAnalysis.priceHistory.length
-                                };
-                            }
-                        }
+    // Filtrer les résultats null
+    const validParsedTxs = parsedTxsResults.filter((result): result is { tx: any; signerTrades: any[]; hasTrades: boolean } => 
+        result !== null && result.hasTrades
+    );
 
-                        return tradeData;
-                    } catch (error) {
-                        console.error(`Error processing trade for ${tokenTrade.mint}:`, error);
-                        return {
-                            mint: tokenTrade.mint,
-                            tokenBalance: tokenTrade,
-                            tradeType: tokenTrade.changeType,
-                            priceAnalysis: null
-                        };
-                    }
-                });
-                
-                // Execute all trades in parallel (rate limiter controls the flow)
-                const trades = await Promise.all(tradePromises);
-                
-                parsedTransactionsArray.push({
-                    signature: tx.signature,
-                    recentBlockhash: tx.recentBlockhash,
-                    blockTime: tx.blockTime,
-                    fee: tx.fee,
-                    error: tx.error,
-                    status: tx.status,
-                    accounts: tx.accounts,
-                    balances: {
-                        signerAddress: tx.balances.signerAddress,
-                        solBalance: tx.balances.signerSolBalance,
-                        tokenBalances: tx.balances.signerTokenBalances,
-                    },
-                    trades: trades
+    // ÉTAPE 2: Collecter tous les trades avec leur token et timestamp
+    // On déduplique par token+timestamp (arrondi à l'heure) pour éviter les appels dupliqués
+    interface TradeWithTimestamp {
+        mint: string;
+        timestamp: number;
+        tx: any;
+        trade: any;
+    }
+
+    const tradesToAnalyze: TradeWithTimestamp[] = [];
+
+    validParsedTxs.forEach(({ tx, signerTrades }) => {
+        signerTrades.forEach((tokenTrade) => {
+            // Only analyze tokens with actual changes
+            if (tokenTrade.uiChange !== 0) {
+                const blockTime = typeof tx.blockTime === 'string' ? parseInt(tx.blockTime) : tx.blockTime;
+                tradesToAnalyze.push({
+                    mint: tokenTrade.mint,
+                    timestamp: blockTime,
+                    tx,
+                    trade: tokenTrade
                 });
             }
+        });
+    });
+
+    // ÉTAPE 3: Créer un map de déduplication par token+timestamp (arrondi à l'heure)
+    // Clé: `mint-timestampHour` → évite les appels BirdEye dupliqués pour le même token à la même heure
+    const uniqueAnalyses = new Map<string, { mint: string; timestamp: number; trades: TradeWithTimestamp[] }>();
+
+    tradesToAnalyze.forEach((tradeData) => {
+        // Arrondir le timestamp à l'heure pour dédupliquer
+        const timestampHour = Math.floor(tradeData.timestamp / 3600) * 3600;
+        const cacheKey = `${tradeData.mint}-${timestampHour}`;
+
+        if (!uniqueAnalyses.has(cacheKey)) {
+            uniqueAnalyses.set(cacheKey, {
+                mint: tradeData.mint,
+                timestamp: tradeData.timestamp, // Initialiser avec le premier timestamp
+                trades: []
+            });
         }
-    }
+
+        const analysisData = uniqueAnalyses.get(cacheKey)!;
+        // Utiliser le timestamp minimum pour avoir l'historique complet
+        analysisData.timestamp = Math.min(analysisData.timestamp, tradeData.timestamp);
+        analysisData.trades.push(tradeData);
+    });
+
+    // ÉTAPE 4: Analyser les prix BirdEye (une seule fois par token+timestamp arrondi) en parallèle
+    const analysisPromises = Array.from(uniqueAnalyses.entries()).map(async ([cacheKey, analysisData]) => {
+        try {
+            // Vérifier le cache d'abord
+            let priceAnalysis = priceAnalysisCache.get(cacheKey);
+            
+            if (!priceAnalysis) {
+                // Analyser avec le timestamp exact du trade (pas arrondi)
+                priceAnalysis = await getPriceAnalysis(analysisData.mint, analysisData.timestamp);
+                
+                if (priceAnalysis) {
+                    // Mettre en cache (limiter la taille du cache pour éviter les fuites mémoire)
+                    if (priceAnalysisCache.size > 1000) {
+                        // Supprimer les 500 plus anciennes entrées
+                        const entries = Array.from(priceAnalysisCache.entries());
+                        entries.slice(0, 500).forEach(([key]) => priceAnalysisCache.delete(key));
+                    }
+                    priceAnalysisCache.set(cacheKey, priceAnalysis);
+                }
+            }
+
+            return {
+                cacheKey,
+                priceAnalysis,
+                trades: analysisData.trades
+            };
+        } catch (error) {
+            console.error(`Error analyzing price for token ${analysisData.mint}:`, error);
+            return {
+                cacheKey,
+                priceAnalysis: null,
+                trades: analysisData.trades
+            };
+        }
+    });
+
+    // Exécuter toutes les analyses BirdEye en parallèle
+    const analyses = await Promise.all(analysisPromises);
+
+    // ÉTAPE 5: Mapper les résultats BirdEye aux trades (par cacheKey)
+    const priceAnalysisByCacheKey = new Map(
+        analyses.map(analysis => [analysis.cacheKey, analysis.priceAnalysis])
+    );
+
+    // ÉTAPE 6: Construire les transactions parsées avec les analyses de prix
+    const parsedTransactionsArray: any[] = [];
+
+    validParsedTxs.forEach(({ tx, signerTrades }) => {
+        const trades = signerTrades.map((tokenTrade) => {
+            const tradeData = {
+                mint: tokenTrade.mint,
+                tokenBalance: tokenTrade,
+                tradeType: tokenTrade.changeType,
+                priceAnalysis: null as any
+            };
+
+            // Utiliser l'analyse de prix mise en cache pour ce token
+            if (tokenTrade.uiChange !== 0) {
+                // Recalculer le cacheKey pour retrouver l'analyse
+                const blockTime = typeof tx.blockTime === 'string' ? parseInt(tx.blockTime) : tx.blockTime;
+                const timestampHour = Math.floor(blockTime / 3600) * 3600;
+                const cacheKey = `${tokenTrade.mint}-${timestampHour}`;
+                
+                const priceAnalysis = priceAnalysisByCacheKey.get(cacheKey);
+                
+                if (priceAnalysis) {
+                    tradeData.priceAnalysis = {
+                        purchasePrice: priceAnalysis.purchasePrice,
+                        currentPrice: priceAnalysis.currentPrice,
+                        athPrice: priceAnalysis.athPrice,
+                        athTimestamp: priceAnalysis.athTimestamp,
+                        priceHistoryPoints: priceAnalysis.priceHistory.length
+                    };
+                }
+            }
+
+            return tradeData;
+        });
+
+        parsedTransactionsArray.push({
+            signature: tx.signature,
+            recentBlockhash: tx.recentBlockhash,
+            blockTime: tx.blockTime,
+            fee: tx.fee,
+            error: tx.error,
+            status: tx.status,
+            accounts: tx.accounts,
+            balances: {
+                signerAddress: tx.balances.signerAddress,
+                solBalance: tx.balances.signerSolBalance,
+                tokenBalances: tx.balances.signerTokenBalances,
+            },
+            trades: trades
+        });
+    });
 
     return parsedTransactionsArray;
 };
