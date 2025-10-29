@@ -1,6 +1,6 @@
-import { decodeTxData } from './utils/decoder/index.js';
-import { getPriceAnalysis } from './services/birdeyes.js';
-import { getSignerTrades } from './utils/decoder/extractBalances.js';
+import { decodeTxData } from './decoder/index.js';
+import { getPriceAnalysis } from '../services/birdeyes.js';
+import { getSignerTrades } from './decoder/extractBalances.js';
 
 /**
  * Cache simple pour éviter les appels BirdEye dupliqués

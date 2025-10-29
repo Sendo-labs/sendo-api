@@ -1,7 +1,7 @@
 import { Request, Response } from 'express';
 import { getTransactionsForAddress, getNftsForAddress, getTokensForAddress, getBalanceForAddress } from '../services/helius.js';
 import { serializedBigInt } from '../utils/decoder/index.js';
-import { parseTransactionsWithPriceAnalysis, calculateGlobalSummary } from '../parseTrade.js';
+import { parseTransactionsWithPriceAnalysis, calculateGlobalSummary } from '../utils/parseTrade.js';
 
 export const getTradesForAddressController = async (req: Request, res: Response) => {
     try {
